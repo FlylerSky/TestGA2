@@ -6,7 +6,7 @@ on:
 jobs:
   ssh-session:
     runs-on: ubuntu-latest
-    timeout-minutes: 360 # Max thời gian chạy của 1 job GitHub Actions (6 tiếng)
+    timeout-minutes: 360 # Giới hạn tối đa 6 tiếng của GitHub Actions
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -30,8 +30,8 @@ jobs:
         run: |
           cloudflared tunnel --url ssh://localhost:22 > cloudflared.log 2>&1 &
           
-          # Chờ cloudflared khởi tạo xong và lấy URL
-          for i in {1..10}; do
+          echo "Đang đợi Cloudflare cấp URL Tunnel..."
+          for i in {1..15}; do
             if grep -q 'trycloudflare.com' cloudflared.log; then
               break
             fi
@@ -40,11 +40,16 @@ jobs:
 
           echo "========================================================"
           echo " LỆNH KẾT NỐI SSH CHO TERMUX:"
-          grep -o 'https://.*\.trycloudflare\.com' cloudflared.log | sed 's|https://|ssh runner@|g'
+          URL=$(grep -o 'https://[a-zA-Z0-9-]*\.trycloudflare\.com' cloudflared.log | head -n 1 | sed 's|https://|ssh runner@|g')
+          if [ -n "$URL" ]; then
+            echo "$URL"
+          else
+            echo "Chưa lấy được URL tự động, đây là toàn bộ log Cloudflare:"
+            cat cloudflared.log
+          fi
           echo "========================================================"
 
       - name: Keep Runner Alive (Max 6 hours)
         run: |
-          echo "SSH Session đã sẵn sàng! Mày có 6 tiếng để quậy."
-          # Loop giữ kết nối liên tục 6 tiếng (21600s)
+          echo "SSH Session đã sẵn sàng! Mày có 6 tiếng để dùng."
           sleep 21600
