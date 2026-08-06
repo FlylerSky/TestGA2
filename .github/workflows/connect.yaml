@@ -1,0 +1,102 @@
+# GitHub Actions workflow — copy this file to:
+#   .github/workflows/connect.yaml
+#
+# Repo layout expected after checkout:
+#   Actions/server.js
+#   Actions/package.json
+#   Actions/lib/protocol.js
+#
+# Manual trigger only. Spawns an interactive PTY shell that dials out
+# to your Render.com relay so you can attach with Client/client.js.
+#
+# Required repository secrets:
+#   RELAY_URL    e.g. wss://your-service.onrender.com/ws
+#   RELAY_TOKEN  same value as RELAY_TOKEN on Render
+
+name: GHA Interactive Terminal
+
+on:
+  workflow_dispatch:
+    inputs:
+      session:
+        description: 'Session name (must match client --session)'
+        required: false
+        default: 'default'
+      timeout_minutes:
+        description: 'Max job runtime (minutes)'
+        required: false
+        default: '120'
+      shell:
+        description: 'Shell binary on the runner'
+        required: false
+        default: 'bash'
+
+concurrency:
+  group: gha-terminal-${{ github.event.inputs.session || 'default' }}
+  cancel-in-progress: true
+
+jobs:
+  terminal:
+    name: Interactive shell via relay
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ fromJSON(github.event.inputs.timeout_minutes || '120') }}
+    defaults:
+      run:
+        working-directory: Actions
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: Actions/package.json
+
+      - name: Install native build deps (node-pty)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential python3 pkg-config
+        working-directory: .
+
+      - name: Install npm dependencies
+        run: npm install --omit=dev
+
+      - name: Show connection hint
+        run: |
+          echo "============================================================"
+          echo "  Server is dialing the relay…"
+          echo "  On your laptop run:"
+          echo ""
+          echo "    cd Client && npm install"
+          echo "    node client.js \\"
+          echo "      --relay \"\$RELAY_URL\" \\"
+          echo "      --token \"\$RELAY_TOKEN\" \\"
+          echo "      --session \"${{ github.event.inputs.session || 'default' }}\" \\"
+          echo "      -L 8080:127.0.0.1:8080"
+          echo ""
+          echo "  Detach client with Ctrl+]"
+          echo "  Cancel this workflow when finished."
+          echo "============================================================"
+
+      - name: Start PTY server (connect to relay)
+        env:
+          RELAY_URL: ${{ secrets.RELAY_URL }}
+          RELAY_TOKEN: ${{ secrets.RELAY_TOKEN }}
+          SESSION: ${{ github.event.inputs.session || 'default' }}
+          SHELL_BIN: ${{ github.event.inputs.shell || 'bash' }}
+          COLS: '120'
+          ROWS: '40'
+        run: |
+          set -euo pipefail
+          if [ -z "${RELAY_URL:-}" ] || [ -z "${RELAY_TOKEN:-}" ]; then
+            echo "::error::Set repository secrets RELAY_URL and RELAY_TOKEN"
+            exit 1
+          fi
+          if [ ! -f server.js ]; then
+            echo "::error::Actions/server.js not found after checkout"
+            exit 1
+          fi
+          node server.js --session "$SESSION"
