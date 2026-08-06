@@ -31,20 +31,30 @@ jobs:
           cloudflared tunnel --url ssh://localhost:22 > cloudflared.log 2>&1 &
           
           echo "Đang đợi Cloudflare cấp URL Tunnel..."
-          for i in {1..15}; do
-            if grep -q 'trycloudflare.com' cloudflared.log; then
+          
+          # Tăng lên 60 lần × 3s = 3 phút chờ tối đa
+          TUNNEL_URL=""
+          for i in {1..60}; do
+            # Lấy URL từ log — cloudflared mới in theo dạng "| https://xxx.trycloudflare.com |"
+            TUNNEL_URL=$(grep -oE 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' cloudflared.log | head -n 1)
+            if [ -n "$TUNNEL_URL" ]; then
               break
             fi
-            sleep 2
+            echo "Lần $i: chưa có URL..."
+            sleep 3
           done
 
           echo "========================================================"
           echo " LỆNH KẾT NỐI SSH CHO TERMUX:"
-          URL=$(grep -o 'https://[a-zA-Z0-9-]*\.trycloudflare\.com' cloudflared.log | head -n 1 | sed 's|https://|ssh runner@|g')
-          if [ -n "$URL" ]; then
-            echo "$URL"
+          if [ -n "$TUNNEL_URL" ]; then
+            HOST=$(echo "$TUNNEL_URL" | sed 's|https://||')
+            echo ""
+            echo "  ssh -o ProxyCommand='cloudflared access ssh --hostname %h' runner@${HOST}"
+            echo ""
+            echo "  Hoặc nếu dùng Termux không có cloudflared:"
+            echo "  ssh runner@${HOST} -p 22"
           else
-            echo "Chưa lấy được URL tự động, đây là toàn bộ log Cloudflare:"
+            echo "Không lấy được URL sau 3 phút. Toàn bộ log:"
             cat cloudflared.log
           fi
           echo "========================================================"
