@@ -1,13 +1,9 @@
 # GitHub Actions workflow — copy this file to:
 #   .github/workflows/connect.yaml
 #
-# Repo layout expected after checkout:
-#   Actions/server.js
-#   Actions/package.json
-#   Actions/lib/protocol.js
-#
-# Manual trigger only. Spawns an interactive PTY shell that dials out
-# to your Render.com relay so you can attach with Client/client.js.
+# Repo layout expected after checkout (one of):
+#   Actions/server.js + Actions/package.json + Actions/lib/
+#   OR flat: server.js + package.json + lib/ at repo root
 #
 # Required repository secrets:
 #   RELAY_URL    e.g. wss://your-service.onrender.com/ws
@@ -40,29 +36,52 @@ jobs:
     name: Interactive shell via relay
     runs-on: ubuntu-latest
     timeout-minutes: ${{ fromJSON(github.event.inputs.timeout_minutes || '120') }}
-    defaults:
-      run:
-        working-directory: Actions
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Do NOT use cache: npm here.
+      # setup-node fails the job with:
+      #   "Some specified paths were not resolved, unable to cache dependencies"
+      # when package-lock.json is missing or cache-dependency-path is wrong.
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: npm
-          cache-dependency-path: Actions/package.json
+          node-version: '22'
+
+      - name: Locate Actions package
+        id: loc
+        run: |
+          set -euo pipefail
+          echo "== repo tree (top) =="
+          ls -la
+          if [ -f Actions/server.js ] && [ -f Actions/package.json ]; then
+            echo "dir=Actions" >> "$GITHUB_OUTPUT"
+            echo "Found Actions/ layout"
+          elif [ -f server.js ] && [ -f package.json ]; then
+            echo "dir=." >> "$GITHUB_OUTPUT"
+            echo "Found repo-root layout"
+          else
+            echo "::error::Neither Actions/server.js nor ./server.js found. Commit the Actions/ folder (server.js, package.json, lib/) to this repo."
+            find . -maxdepth 3 -type f \( -name 'server.js' -o -name 'package.json' -o -name 'connect.yaml' \) 2>/dev/null || true
+            exit 1
+          fi
 
       - name: Install native build deps (node-pty)
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq build-essential python3 pkg-config
-        working-directory: .
 
       - name: Install npm dependencies
-        run: npm install --omit=dev
+        working-directory: ${{ steps.loc.outputs.dir }}
+        run: |
+          set -euo pipefail
+          if [ -f package-lock.json ]; then
+            npm ci --omit=dev
+          else
+            npm install --omit=dev
+          fi
 
       - name: Show connection hint
         run: |
@@ -82,6 +101,7 @@ jobs:
           echo "============================================================"
 
       - name: Start PTY server (connect to relay)
+        working-directory: ${{ steps.loc.outputs.dir }}
         env:
           RELAY_URL: ${{ secrets.RELAY_URL }}
           RELAY_TOKEN: ${{ secrets.RELAY_TOKEN }}
@@ -91,12 +111,14 @@ jobs:
           ROWS: '40'
         run: |
           set -euo pipefail
-          if [ -z "${RELAY_URL:-}" ] || [ -z "${RELAY_TOKEN:-}" ]; then
-            echo "::error::Set repository secrets RELAY_URL and RELAY_TOKEN"
+          if [ -z "${RELAY_URL:-}" ]; then
+            echo "::error::Secret RELAY_URL is empty. Set it to wss://YOUR-APP.onrender.com/ws"
             exit 1
           fi
-          if [ ! -f server.js ]; then
-            echo "::error::Actions/server.js not found after checkout"
+          if [ -z "${RELAY_TOKEN:-}" ]; then
+            echo "::error::Secret RELAY_TOKEN is empty. Must match Render RELAY_TOKEN"
             exit 1
           fi
+          echo "RELAY_URL host: $(echo "$RELAY_URL" | sed -E 's#^[a-z]+://##' | cut -d/ -f1)"
+          echo "SESSION=$SESSION"
           node server.js --session "$SESSION"
