@@ -1,0 +1,50 @@
+name: SSH via Cloudflare Quick Tunnel
+
+on:
+  workflow_dispatch:
+
+jobs:
+  ssh-session:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360 # Max thời gian chạy của 1 job GitHub Actions (6 tiếng)
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Environment & SSH Server
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openssh-server tmux htop curl wget git build-essential
+          sudo systemctl start ssh
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PUBLIC_KEY }}" >> ~/.ssh/authorized_keys
+          chmod 600 ~/.ssh/authorized_keys
+          chmod 700 ~/.ssh
+
+      - name: Install cloudflared
+        run: |
+          curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+          sudo dpkg -i cloudflared.deb
+
+      - name: Start Cloudflare Tunnel
+        run: |
+          cloudflared tunnel --url ssh://localhost:22 > cloudflared.log 2>&1 &
+          
+          # Chờ cloudflared khởi tạo xong và lấy URL
+          for i in {1..10}; do
+            if grep -q 'trycloudflare.com' cloudflared.log; then
+              break
+            fi
+            sleep 2
+          done
+
+          echo "========================================================"
+          echo " LỆNH KẾT NỐI SSH CHO TERMUX:"
+          grep -o 'https://.*\.trycloudflare\.com' cloudflared.log | sed 's|https://|ssh runner@|g'
+          echo "========================================================"
+
+      - name: Keep Runner Alive (Max 6 hours)
+        run: |
+          echo "SSH Session đã sẵn sàng! Mày có 6 tiếng để quậy."
+          # Loop giữ kết nối liên tục 6 tiếng (21600s)
+          sleep 21600
