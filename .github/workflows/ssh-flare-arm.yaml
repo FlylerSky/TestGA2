@@ -1,0 +1,70 @@
+name: SSH via Cloudflare Quick Tunnel (ARM64)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  ssh-session:
+    # Runner ARM64 hosted miễn phí — CHỈ hoạt động trên PUBLIC repo.
+    # Nếu repo private, đổi sang self-hosted ARM runner hoặc dùng gói trả phí.
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 360 # Giới hạn tối đa 6 tiếng của GitHub Actions
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Show runner architecture (kiểm tra chắc chắn là ARM)
+        run: |
+          uname -m
+          lscpu | grep -i architecture
+
+      - name: Setup Environment & SSH Server
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openssh-server tmux htop curl wget git build-essential
+          sudo systemctl start ssh
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PUBLIC_KEY }}" >> ~/.ssh/authorized_keys
+          chmod 600 ~/.ssh/authorized_keys
+          chmod 700 ~/.ssh
+
+      - name: Install cloudflared (bản arm64)
+        run: |
+          curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64.deb
+          sudo dpkg -i cloudflared.deb
+
+      - name: Start Cloudflare Tunnel
+        run: |
+          cloudflared tunnel --url ssh://localhost:22 > cloudflared.log 2>&1 &
+
+          echo "Đang đợi Cloudflare cấp URL Tunnel..."
+
+          TUNNEL_URL=""
+          for i in {1..60}; do
+            TUNNEL_URL=$(grep -oE 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' cloudflared.log | head -n 1)
+            if [ -n "$TUNNEL_URL" ]; then
+              break
+            fi
+            echo "Lần $i: chưa có URL..."
+            sleep 3
+          done
+
+          echo "========================================================"
+          echo " LỆNH KẾT NỐI SSH CHO TERMUX:"
+          if [ -n "$TUNNEL_URL" ]; then
+            HOST=$(echo "$TUNNEL_URL" | sed 's|https://||')
+            echo ""
+            echo "  ssh -o ProxyCommand='cloudflared access ssh --hostname %h' runner@${HOST}"
+            echo ""
+            echo "  Hoặc nếu dùng Termux không có cloudflared:"
+            echo "  ssh runner@${HOST} -p 22"
+          else
+            echo "Không lấy được URL sau 3 phút. Toàn bộ log:"
+            cat cloudflared.log
+          fi
+          echo "========================================================"
+
+      - name: Keep Runner Alive (Max 6 hours)
+        run: |
+          echo "SSH Session (ARM64) đã sẵn sàng! Mày có 6 tiếng để dùng."
+          sleep 21600
